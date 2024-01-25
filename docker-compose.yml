@@ -1,8 +1,9 @@
 version: "3.9"
-
+ 
 networks:
   proxy:
-
+    name: goat
+ 
 services:
   api:
     build:
@@ -21,7 +22,7 @@ services:
       - "8000:8000"
     networks:
       proxy:
-
+ 
   rabbitmq:
     image: rabbitmq:management
     ports:
@@ -29,12 +30,12 @@ services:
       - 15672:15672
     networks:
       proxy:
-
+ 
   redis:
     image: redis:latest
     networks:
       proxy:
-
+ 
   celery-worker:
     build: .
     command: celery -A src.core.worker worker -c 1 --loglevel=info
