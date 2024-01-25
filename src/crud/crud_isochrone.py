@@ -83,11 +83,20 @@ class CRUDIsochrone:
     def __init__(self, db_connection: AsyncSession, redis: Redis) -> None:
         self.db_connection = db_connection
         self.redis = redis
+        self.initializing_routing_network = False
         self.routing_network = None
 
-    async def read_network(
-        self, routing_network: dict, obj_in: IIsochroneActiveMobility
-    ) -> Any:
+    async def init_routing_network(self):
+        """Initialize routing network (processed segments) and load into memory."""
+
+        if self.routing_network is not None or self.initializing_routing_network:
+            return
+
+        self.initializing_routing_network = True
+        self.routing_network = await FetchRoutingNetwork(self.db_connection).fetch()
+        self.initializing_routing_network = False
+
+    async def read_network(self, obj_in: IIsochroneActiveMobility) -> Any:
         """Read relevant sub-network for isochrone calculation from polars dataframe."""
 
         # Create input table for isochrone origin points
@@ -139,7 +148,7 @@ class CRUDIsochrone:
         # Get relevant segments & connectors
         sub_network = pl.DataFrame()
         for h3_3 in h3_3_cells:
-            sub_df = routing_network[h3_3].filter(
+            sub_df = self.routing_network[h3_3].filter(
                 pl.col("h3_6").is_in(h3_6_cells)
                 & pl.col("class_").is_in(valid_segment_classes)
             )
@@ -380,24 +389,20 @@ class CRUDIsochrone:
     ):
         """Compute isochrones for the given request parameters."""
 
-        # Fetch routing network (processed segments) and load into memory
-        if self.routing_network is None:
-            self.routing_network = await FetchRoutingNetwork(self.db_connection).fetch()
-        routing_network = self.routing_network
-
         total_start = time.time()
 
         obj_in = IIsochroneActiveMobility(**obj_in)
+
+        # Ensure routing network is initialized
+        if self.routing_network is None:
+            raise Exception("Routing network not initialized.")
 
         # Read & process routing network to extract relevant sub-network
         start_time = time.time()
         sub_routing_network = None
         origin_connector_ids = None
         try:
-            sub_routing_network, origin_connector_ids = await self.read_network(
-                routing_network,
-                obj_in,
-            )
+            sub_routing_network, origin_connector_ids = await self.read_network(obj_in)
         except Exception as e:
             self.redis.set(str(obj_in.layer_id), ProcessingStatus.failure.value)
             await self.db_connection.rollback()
